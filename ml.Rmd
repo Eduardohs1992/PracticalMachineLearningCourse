@@ -1,0 +1,160 @@
+---
+title: "Machine Learning Project"
+author: "Luis Oña"
+date: "2 de noviembre de 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libraries, include=TRUE, message=FALSE}
+library(tidyverse)
+library(caret)
+library(e1071)
+library(rpart)
+library(rpart.plot)
+library(RColorBrewer)
+#library(rattle)
+library(randomForest)
+library(knitr)
+```
+
+
+## Introduction
+
+### Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+### Data
+
+The training data for this project are available here: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har. If you use the document you create for this class for any purpose please cite them as they have been very generous in allowing their data to be used for this kind of assignment.
+
+
+## Data load
+
+```{r data, cache=TRUE}
+trainUrl <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testUrl <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+training <- read.csv(url(trainUrl), na.strings=c("NA", "#DIV/0!", ""))
+testing <- read.csv(url(testUrl), na.strings=c("NA", "#DIV/0!", ""))
+
+dim(testing)
+dim(testing)
+```
+
+## Cleaning the data
+
+Remove variables that have one unique value (i.e. are zero variance predictors). Because don't contribute information to the model.
+
+```{r}
+x <- apply(training, 2, function(x){length(unique(x))})
+training <- training %>% select(which(x>1))
+testing <- testing %>% select(which(x>1))
+dim(training)
+dim(testing)
+```
+
+Clean variables with much `NA's`
+
+```{r}
+x <- colSums(is.na(training))/nrow(training)
+table(x)
+```
+
+There are a lot variables with `NA's`, we procedure to eliminate
+```{r}
+training <- training %>% select(which(x  == 0))
+testing <- testing %>% select(which(x == 0))
+dim(training)
+dim(testing)
+```
+
+Eliminate the 3 first variables because are people information
+```{r}
+training <- training %>% select(-c(1:3))
+```
+
+Transform `cvtd_timestamp` variable (date) in a `month`
+
+```{r}
+training <- training %>% 
+    mutate(Month = as.factor(lubridate::month(lubridate::dmy_hms(cvtd_timestamp)))) %>% 
+    select(-cvtd_timestamp)
+testing <- testing %>% 
+    mutate(Month = as.factor(lubridate::month(lubridate::dmy_hms(cvtd_timestamp)))) %>% 
+    select(-cvtd_timestamp)
+
+summary(training$num_window)
+```
+
+We have a clean data frame for create a model.
+
+```{r}
+str(training)
+```
+
+
+
+## Train Modelo
+
+### Target Variable
+
+```{r}
+ggplot(training, aes(classe))+
+    geom_bar(fill="lightblue")
+```
+
+
+## Features Selection
+We will create a Random Forest Model for feature Selection, because this model has a Importance Variables characteristic.
+
+```{r, cache=TRUE}
+rf_model <- randomForest(classe~., data = training, importance=TRUE)
+var_import <- importance(rf_model) %>% as.data.frame() %>% 
+    mutate(Variable = row.names(.)) %>% 
+    arrange(desc(MeanDecreaseGini)) 
+head(var_import, 10)
+varImpPlot(rf_model,type=2) 
+```
+
+We can see that the first 8 variables are the most important (in the rf model) for classify `classe` variable.
+With these variables we are going to run a SVM model.
+
+```{r, cache=TRUE}
+var_model <- c(var_import$Variable[1:8], "classe")
+training1 <- training %>% select(var_model)
+#svm_model <- svm(classe~., data = training1)
+tune <- tune(svm, classe~., data = training1, 
+                 ranges =list(cost=  10^(-1:2), gamma = c(.5,1,2)), 
+             tunecontrol=tune.control(cross=10))
+summary(tune)
+print(tune)
+```
+
+We have the optimal hyperprameters, then we run a svm model with these
+
+```{r svm_modelo, cache=TRUE}
+svm_model <- svm(classe~., data = training1, cost=100, gamma=2 )
+summary(svm_model)
+confusionMatrix(svm_model$fitted, training1$classe)
+```
+
+Support Vector Machine gave an Accuracy in the myTesting dataset of 99.8%, which was more accurate. This is a good model for predict the variable `classe` let's go to check how it works in the testing data.
+
+## Predicting Results on the Test Data
+
+```{r}
+pred <- predict(svm_model,testing)
+table(pred)
+pred
+```
+
+
